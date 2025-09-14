@@ -101,105 +101,96 @@ def analyze_text(body: TextIn):
 @app.post("/analyze-batch")
 def analyze_batch(body: BatchIn):
     if not body.texts:
-        return {"success": True, "results": [], "statistics": {"total_analyzed": 0}}
+        return {
+            "success": True, 
+            "results": [], 
+            "statistics": {
+                "total_analyzed": 0,
+                "sentiment_distribution": {"positive": 0, "neutral": 0, "negative": 0},
+                "sentiment_percentages": {"positive": 0.0, "neutral": 0.0, "negative": 0.0},
+                "average_confidence": 0.0
+            },
+            "overall_sentiment": "neutral"
+        }
 
-    # Attempt cache based on hash of texts
-    cache_key = None
-    if cache and len(body.texts) <= 500:
-        cache_key = f"batch:{hash(tuple(body.texts))}:{body.method or 'auto'}"
-        cached = cache.get("analysis", cache_key)
-        if cached:
-            return cached
-
-    # If we want to support rich analyzers, do it here based on method
-    method = (body.method or "auto").lower()
-    if method in {"ensemble", "roberta", "fast", "ml", "auto"}:
-        try:
-            # Lazy import to avoid startup cost unless used
-            from app.ml.unified_sentiment_analyzer import get_unified_analyzer  # type: ignore
-            analyzer = get_unified_analyzer()
-            batch = analyzer.analyze_batch(body.texts, method=method)
-            results_norm = [
-                {
-                    "text": (r.get("text") or "")[:100],
-                    "predicted_sentiment": r.get("predicted_sentiment", "neutral"),
-                    "confidence": float(r.get("confidence", 0.0)),
-                }
-                for r in batch.get("results", [])
-            ]
-            stats = batch.get("statistics", {})
-            response = {
-                "success": True,
-                "results": results_norm,
-                "statistics": {
-                    "total_analyzed": stats.get("total_analyzed", len(results_norm)),
-                    "sentiment_distribution": stats.get("sentiment_distribution", {}),
-                    "sentiment_percentages": stats.get("sentiment_percentages", {}),
-                    "average_confidence": stats.get("average_confidence", 0.0),
-                },
-                "overall_sentiment": max(
-                    (stats.get("sentiment_distribution", {}) or {"neutral": 1}),
-                    key=(stats.get("sentiment_distribution", {}) or {"neutral": 1}).get,
-                ),
-                "method": method,
-                "models_used": analyzer.analyzers.keys() if hasattr(analyzer, "analyzers") else [],
-            }
-        except Exception as e:
-            # Fallback to pipeline if unified analyzer fails for any reason
-            print(f"Unified analyzer unavailable/failure ({e}); falling back to pipeline")
-            method = "pipeline"
-            pipe = get_pipeline()
-            raw = pipe(body.texts)
-            results: List[Dict[str, Any]] = []
-            counts = {"positive": 0, "neutral": 0, "negative": 0}
-            for t, r in zip(body.texts, raw):
-                label = _normalize_label(r.get("label", "neutral"))
-                results.append({"text": t[:100], "predicted_sentiment": label, "confidence": float(r.get("score", 0.0))})
-                counts[label] += 1
-            total = len(results)
-            if counts["positive"] >= total * 0.5:
-                overall = "positive"
-            elif counts["negative"] >= total * 0.4:
-                overall = "negative"
-            else:
-                overall = "neutral"
-            response = {
-                "success": True,
-                "results": results,
-                "statistics": {"total_analyzed": total, "sentiment_distribution": counts},
-                "overall_sentiment": overall,
-                "method": method,
-            }
-    else:
-        # Default to pipeline
-        method = "pipeline"
+    # Use the pipeline directly for all methods - simpler and more reliable
+    try:
         pipe = get_pipeline()
-        raw = pipe(body.texts)
-        results: List[Dict[str, Any]] = []
+        
+        # Process all texts at once if small batch, otherwise chunk it
+        texts_list = list(body.texts)  # Ensure it's a list
+        if len(texts_list) <= 32:
+            raw_results = pipe(texts_list)
+        else:
+            # Process in batches if needed for better performance
+            batch_size = 32
+            raw_results = []
+            for i in range(0, len(texts_list), batch_size):
+                batch_texts = texts_list[i:i+batch_size]
+                batch_raw = pipe(batch_texts)
+                raw_results.extend(batch_raw)
+        
+        results = []
         counts = {"positive": 0, "neutral": 0, "negative": 0}
-        for t, r in zip(body.texts, raw):
-            label = _normalize_label(r.get("label", "neutral"))
-            results.append({"text": t[:100], "predicted_sentiment": label, "confidence": float(r.get("score", 0.0))})
+        confidence_sum = 0.0
+        
+        for text, res in zip(texts_list, raw_results):
+            label = _normalize_label(res.get("label", "neutral"))
+            conf = float(res.get("score", 0.0))
+            results.append({
+                "text": str(text)[:100],  # Ensure it's a string
+                "predicted_sentiment": label, 
+                "confidence": conf
+            })
             counts[label] += 1
+            confidence_sum += conf
+        
         total = len(results)
+        avg_confidence = confidence_sum / total if total > 0 else 0.0
+        
+        # Calculate percentages
+        percentages = {
+            "positive": (counts["positive"] / total * 100.0) if total > 0 else 0.0,
+            "neutral": (counts["neutral"] / total * 100.0) if total > 0 else 0.0,
+            "negative": (counts["negative"] / total * 100.0) if total > 0 else 0.0
+        }
+        
+        # Determine overall sentiment
         if counts["positive"] >= total * 0.5:
             overall = "positive"
         elif counts["negative"] >= total * 0.4:
             overall = "negative"
         else:
             overall = "neutral"
-        response = {
+        
+        return {
             "success": True,
             "results": results,
-            "statistics": {"total_analyzed": total, "sentiment_distribution": counts},
+            "statistics": {
+                "total_analyzed": total, 
+                "sentiment_distribution": counts,
+                "sentiment_percentages": percentages,
+                "average_confidence": avg_confidence
+            },
             "overall_sentiment": overall,
-            "method": method,
+            "method": "distilbert",
+            "models_used": ["distilbert"]
         }
-
-    if cache and cache_key:
-        cache.set("analysis", cache_key, response, ttl_hours=6)
-
-    return response
+    except Exception as e:
+        print(f"Error in analyze_batch: {e}")
+        # Return error response
+        return {
+            "success": False,
+            "error": str(e),
+            "results": [],
+            "statistics": {
+                "total_analyzed": 0,
+                "sentiment_distribution": {"positive": 0, "neutral": 0, "negative": 0},
+                "sentiment_percentages": {"positive": 0.0, "neutral": 0.0, "negative": 0.0},
+                "average_confidence": 0.0
+            },
+            "overall_sentiment": "neutral"
+        }
 
 
 @app.post("/summarize")
