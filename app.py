@@ -22,7 +22,17 @@ def get_pipeline():
     if _pipeline is None:
         with _lock:
             if _pipeline is None:
-                _pipeline = pipeline("sentiment-analysis", model=MODEL_NAME, device=-1, batch_size=32, truncation=True)
+                import torch
+                # Automatically use GPU if available, otherwise CPU
+                device = 0 if torch.cuda.is_available() else -1
+                _pipeline = pipeline(
+                    "sentiment-analysis", 
+                    model=MODEL_NAME, 
+                    device=device, 
+                    batch_size=32, 
+                    truncation=True
+                )
+                print(f"Model loaded on device: {'GPU' if device == 0 else 'CPU'}")
     return _pipeline
 
 

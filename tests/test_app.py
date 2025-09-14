@@ -2,13 +2,13 @@ import json
 from fastapi.testclient import TestClient
 import sys
 import os
-# Get the directory of the current file (test_app.py)
+
+# Add parent directory to path for imports
 current_dir = os.path.dirname(os.path.abspath(__file__))
-# Get the directory containing the 'sentiment_ml_service' package (two levels up from 'tests')
-project_root = os.path.abspath(os.path.join(current_dir, '..', '..'))
-# Add the project root to sys.path
-sys.path.insert(0, project_root)
-from sentiment_ml_service.app import app
+parent_dir = os.path.dirname(current_dir)
+sys.path.insert(0, parent_dir)
+
+from app import app
 
 client = TestClient(app)
 
