@@ -14,9 +14,17 @@ image = (
         "OPENBLAS_NUM_THREADS": "1",
         "TOKENIZERS_PARALLELISM": "false",
         "CUDA_VISIBLE_DEVICES": "0",  # Use first GPU
+        # Pull REDIS_URL from your local environment at build time (do not hardcode secrets)
+        "REDIS_URL": os.environ.get("REDIS_URL", "")
     })
-    .add_local_file("app.py", "/root/app.py")  # Add app.py last to avoid rebuilding
-    .add_local_dir("tests", "/root/tests")  # Add tests directory
+    # Include the full app package (analyzers and model artifacts)
+    .add_local_dir("app", "/root/app")
+    # Include FastAPI entrypoint and cache shim (avoid name clash with package 'app')
+    .add_local_file("app.py", "/root/service_main.py")
+    .add_local_file("app.py", "/root/app.py")
+    .add_local_file("cache.py", "/root/cache.py")
+    # Add tests directory for CI and remote testing
+    .add_local_dir("tests", "/root/tests")
 )
 
 app = App("sentiment-ml-service")
@@ -24,7 +32,7 @@ app = App("sentiment-ml-service")
 # Test runner function
 @app.function(
     image=image,
-    gpu=gpu.T4(),  # Use T4 GPU for tests (cost-effective)
+    gpu="T4",  # Use T4 GPU for tests (cost-effective)
     timeout=300,
 )
 def run_tests():
@@ -57,27 +65,26 @@ def run_tests():
 # Main FastAPI app with GPU support
 @app.function(
     image=image,
-    gpu=gpu.T4(),  # Use T4 GPU for inference
+    gpu="T4",  # Use T4 GPU for inference
     min_containers=1,  # Keep at least one container warm
     max_containers=10,  # Auto-scale up to 10 containers
     timeout=120,
-    allow_concurrent_inputs=100,  # Handle multiple requests concurrently
 )
 @asgi_app()
 def fastapi_app():
     import sys
     sys.path.insert(0, "/root")
-    from app import app as fastapi_instance
+    from service_main import app as fastapi_instance
     return fastapi_instance
 
 # Health check function
-@app.function(image=image, gpu=gpu.T4())
+@app.function(image=image, gpu="T4")
 def health_check():
     """Check if GPU is available and model can be loaded."""
     import torch
     import sys
     sys.path.insert(0, "/root")
-    from app import get_pipeline
+    from service_main import get_pipeline
     
     # Check GPU availability
     gpu_available = torch.cuda.is_available()
@@ -87,6 +94,7 @@ def health_check():
     try:
         pipeline = get_pipeline()
         model_loaded = True
+        error = None
     except Exception as e:
         model_loaded = False
         error = str(e)
@@ -95,16 +103,16 @@ def health_check():
         "gpu_available": gpu_available,
         "gpu_count": gpu_count,
         "model_loaded": model_loaded,
-        "error": error if not model_loaded else None
+        "error": error
     }
 
 if __name__ == "__main__":
-    # Run tests before deploying
+    # Optionally run tests before deploying (set RUN_REMOTE_TESTS=1 to enable)
     with app.run():
-        print("Running tests...")
-        result = run_tests.remote()
-        print(result)
-    
+        if os.environ.get("RUN_REMOTE_TESTS") == "1":
+            print("Running tests...")
+            result = run_tests.remote()
+            print(result)
     # Deploy the app
     print("Deploying app...")
-    app.deploy("sentiment-ml-service")
+    app.deploy()

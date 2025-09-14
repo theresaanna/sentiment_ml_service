@@ -1,9 +1,26 @@
+# Web framework
 fastapi==0.111.0
 uvicorn==0.30.1
 pydantic==2.11.9
+python-multipart==0.0.20
+
+# ML dependencies
 transformers==4.48.0
 torch==2.8.0
 numpy>=1.26.0
+scikit-learn==1.5.2
+joblib>=1.4.2
+
+# Cache
+redis==5.0.8
+
+# Deployment
 modal==0.77.0
+
+# Testing
 pytest==8.0.0
+pytest-cov==7.0.0
 httpx==0.27.0
+
+# Data processing (for tests)
+pandas==2.3.2
