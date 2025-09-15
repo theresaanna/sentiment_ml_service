@@ -27,7 +27,7 @@ class TestSentimentAnalysis:
         data = response.json()
         assert data["status"] == "ok"
         assert "model" in data
-        assert data["model"] == "distilbert-base-uncased-finetuned-sst-2-english"
+        assert data["model"] == "cardiffnlp/twitter-roberta-base-sentiment-latest"
     
     def test_analyze_positive_text(self):
         """Test analyzing a positive sentiment text."""
@@ -40,7 +40,7 @@ class TestSentimentAnalysis:
         assert data["success"] is True
         assert data["result"]["predicted_sentiment"] == "positive"
         assert data["result"]["confidence"] > 0.8
-        assert "distilbert" in data["models_used"]
+        assert "roberta" in data["models_used"]
     
     def test_analyze_negative_text(self):
         """Test analyzing a negative sentiment text."""

@@ -41,10 +41,20 @@ def main():
     """)
     
     # Step 1: Check Modal authentication
-    if not run_command("modal token", "Checking Modal authentication"):
+    # Try to list apps as a way to verify authentication
+    result = subprocess.run("modal app list", shell=True, capture_output=True, text=True)
+    if result.returncode != 0:
+        print("\n❌ Error: Modal authentication check failed!")
         print("\n⚠️  Please authenticate with Modal first:")
         print("   Run: modal setup")
+        if result.stderr:
+            print(f"\nError details: {result.stderr}")
         sys.exit(1)
+    else:
+        print(f"\n{'='*60}")
+        print(f"🔧 Checking Modal authentication")
+        print(f"{'='*60}")
+        print("✅ Modal authentication verified!")
     
     # Step 2: Run local tests
     print("\n" + "="*60)
