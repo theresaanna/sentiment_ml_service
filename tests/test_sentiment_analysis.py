@@ -11,6 +11,7 @@ parent_dir = os.path.dirname(current_dir)
 sys.path.insert(0, parent_dir)
 
 from fastapi.testclient import TestClient
+# Import from app.py module directly
 from app import app, get_pipeline
 
 client = TestClient(app)

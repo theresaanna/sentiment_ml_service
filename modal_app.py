@@ -17,9 +17,9 @@ image = (
         # Pull REDIS_URL from your local environment at build time (do not hardcode secrets)
         "REDIS_URL": os.environ.get("REDIS_URL", "")
     })
-    # Include the full app package (analyzers and model artifacts)
-    .add_local_dir("app", "/root/app")
-    # Include FastAPI entrypoint and cache shim (avoid name clash with package 'app')
+    # Include the full app_modules package (analyzers and model artifacts)
+    .add_local_dir("app_modules", "/root/app_modules")
+    # Include FastAPI entrypoint and cache shim
     .add_local_file("app.py", "/root/service_main.py")
     .add_local_file("app.py", "/root/app.py")
     .add_local_file("cache.py", "/root/cache.py")

@@ -19,7 +19,8 @@ try:
 except Exception:
     cache = None  # Cache is optional
 
-MODEL_NAME = os.getenv("MODEL_NAME", "distilbert-base-uncased-finetuned-sst-2-english")
+# Use RoBERTa model that supports 3-class sentiment (positive, neutral, negative)
+MODEL_NAME = os.getenv("MODEL_NAME", "cardiffnlp/twitter-roberta-base-sentiment-latest")
 
 # Lazy, thread-safe singleton for pipeline
 _pipeline = None
@@ -71,13 +72,32 @@ def health():
 
 
 def _normalize_label(label: str) -> str:
+    """Normalize sentiment labels from RoBERTa model.
+    
+    RoBERTa twitter-roberta-base-sentiment-latest outputs: 'positive', 'neutral', 'negative'
+    (Some older versions might output LABEL_0/1/2)
+    """
     label = (label or "neutral").lower()
+    
+    # Direct text labels (what RoBERTa actually outputs)
+    if label in ("positive", "neutral", "negative"):
+        return label
+    
+    # Handle older RoBERTa label format (just in case)
+    if "label_0" in label:
+        return "negative"
+    if "label_1" in label:
+        return "neutral"
+    if "label_2" in label:
+        return "positive"
+    
+    # Handle variations
     if "pos" in label:
         return "positive"
     if "neg" in label:
         return "negative"
-    if label in ("positive", "neutral", "negative"):
-        return label
+    
+    # Default to neutral if unknown
     return "neutral"
 
 
@@ -93,7 +113,7 @@ def analyze_text(body: TextIn):
             "predicted_sentiment": label,
             "confidence": float(res.get("score", 0.0)),
         },
-        "models_used": ["distilbert"],
+        "models_used": ["roberta"],
         "method": body.method or "auto",
     }
 
@@ -173,8 +193,8 @@ def analyze_batch(body: BatchIn):
                 "average_confidence": avg_confidence
             },
             "overall_sentiment": overall,
-            "method": "distilbert",
-            "models_used": ["distilbert"]
+            "method": "roberta",
+            "models_used": ["roberta"]
         }
     except Exception as e:
         print(f"Error in analyze_batch: {e}")
@@ -213,7 +233,7 @@ def summarize(body: SummarizeIn):
 
     # Import summarizer lazily
     try:
-        from app.science.comment_summarizer import CommentSummarizer  # type: ignore
+        from app_modules.science.comment_summarizer import CommentSummarizer  # type: ignore
         use_openai = (body.method == "openai") and bool(os.getenv("OPENAI_API_KEY"))
         summarizer = CommentSummarizer(use_openai=use_openai)
         if body.method == "transformer":
