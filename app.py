@@ -235,34 +235,10 @@ def summarize(body: SummarizeIn):
     # Import summarizer lazily
     try:
         from app_modules.science.comment_summarizer import CommentSummarizer  # type: ignore
-        use_openai = (body.method == "openai") and bool(os.getenv("OPENAI_API_KEY"))
-        summarizer = CommentSummarizer(use_openai=use_openai)
-        if body.method == "transformer":
-            result = summarizer.summarize_with_transformer(body.comments, body.sentiment)
-        elif body.method == "objective":
-            result = summarizer.create_objective_summary(body.comments, body.sentiment)
-        else:
-            result = summarizer.generate_summary(body.comments, body.sentiment)
+        summarizer = CommentSummarizer()
+        result = summarizer.generate_summary(body.comments, body.sentiment)
     except Exception as e:
-        # Fallback summary
-        dist = (body.sentiment or {}).get("sentiment_distribution") or (body.sentiment or {}).get("sentiment_counts") or {}
-        pos = dist.get("positive", 0); neu = dist.get("neutral", 0); neg = dist.get("negative", 0)
-        total = (body.sentiment or {}).get("total_analyzed", 0) or (pos + neu + neg)
-        def pct(x):
-            return round((x / total * 100), 1) if total else 0.0
-        trend = "mixed"
-        if pos >= max(neg, neu) and pos >= total * 0.5:
-            trend = "mostly positive"
-        elif neg >= max(pos, neu) and neg >= total * 0.4:
-            trend = "mostly negative"
-        result = {
-            "summary": (
-                f"Viewer reactions are {trend}. Distribution — "
-                f"positive: {pct(pos)}%, neutral: {pct(neu)}%, negative: {pct(neg)}%."
-            ),
-            "method": "fallback",
-            "comments_analyzed": total,
-        }
+        return {"success": False, "error": f"OpenAI summarization failed: {str(e)}"}
 
     if cache and cache_key:
         cache.set("summary", cache_key, result, ttl_hours=6)
