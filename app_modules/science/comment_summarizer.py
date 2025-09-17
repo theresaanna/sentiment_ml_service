@@ -20,9 +20,14 @@ class CommentSummarizer:
         openai_key = os.getenv('OPENAI_API_KEY')
         if not openai_key:
             raise ValueError("OPENAI_API_KEY environment variable is required")
-            
-        self.client = OpenAI(api_key=openai_key)
-        logger.info("Using OpenAI for comment summarization")
+
+        # Optional overrides
+        self.model_name = os.getenv('OPENAI_SUMMARY_MODEL', 'gpt-4o-mini')
+        timeout_s = float(os.getenv('OPENAI_TIMEOUT_SECONDS', '30'))
+
+        # Initialize client with timeout
+        self.client = OpenAI(api_key=openai_key, timeout=timeout_s)
+        logger.info(f"Using OpenAI for comment summarization (model={self.model_name})")
     
     def _prepare_comments_text(self, comments: List[Dict], sentiment_results: Optional[Dict] = None) -> str:
         """
@@ -160,7 +165,7 @@ class CommentSummarizer:
             """
             
             response = self.client.chat.completions.create(
-                model="gpt-3.5-turbo",
+                model=self.model_name,
                 messages=[
                     {"role": "system", "content": "You are an insightful social media analyst with a conversational, engaging style. You excel at reading between the lines of comment sections to understand what's really happening. You write like you're explaining the dynamics to a smart friend - informative but accessible, thorough but engaging. You use strategic emojis for emphasis and maintain balance while being genuinely insightful about human behavior and digital discourse."},
                     {"role": "user", "content": prompt}
@@ -189,11 +194,12 @@ class CommentSummarizer:
             return result
             
         except Exception as e:
-            logger.error(f"Error using OpenAI API: {e}")
+            err_type = type(e).__name__
+            logger.error(f"Error using OpenAI API: {err_type}: {e}")
             return {
-                'summary': f"Unable to generate summary due to OpenAI API error: {str(e)}",
+                'summary': f"Unable to generate summary due to OpenAI API error ({err_type}).",
                 'method': 'openai_error',
-                'error': str(e),
+                'error': f"{err_type}: {str(e)}",
                 'comments_analyzed': len(comments)
             }
     

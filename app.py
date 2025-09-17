@@ -2,7 +2,6 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 import os
 import threading
-from transformers import pipeline
 from typing import List, Dict, Any, Optional
 import json
 import hashlib
@@ -32,18 +31,41 @@ def get_pipeline():
     if _pipeline is None:
         with _lock:
             if _pipeline is None:
-                import torch
-                # Automatically use GPU if available, otherwise CPU
-                device = 0 if torch.cuda.is_available() else -1
-                _pipeline = pipeline(
-                    "sentiment-analysis",
-                    model=MODEL_NAME,
-                    device=device,
-                    batch_size=32,
-                    truncation=True,
-                    max_length=512,
-                )
-                print(f"Model loaded on device: {'GPU' if device == 0 else 'CPU'}")
+                # Optional lightweight rule-based pipeline for constrained/test envs
+                if os.getenv("USE_FAKE_PIPELINE") == "1":
+                    class _FakeSentimentPipeline:
+                        def __call__(self, texts):
+                            if isinstance(texts, str):
+                                texts = [texts]
+                            results = []
+                            for t in texts:
+                                s = (t or "").lower()
+                                score = 0.5
+                                label = "neutral"
+                                pos_keywords = ["love", "amazing", "fantastic", "best", "great", "wonderful", "😊", "❤️", "highly recommend", "awesome"]
+                                neg_keywords = ["terrible", "hate", "worst", "disappointed", "awful", "bad", "can't stand", "horrible"]
+                                if any(k in s for k in pos_keywords):
+                                    label, score = "positive", 0.95
+                                if any(k in s for k in neg_keywords):
+                                    label, score = "negative", 0.9
+                                results.append({"label": label, "score": float(score)})
+                            return results
+                    _pipeline = _FakeSentimentPipeline()
+                else:
+                    # Heavy pipeline only when explicitly needed
+                    import torch  # type: ignore
+                    from transformers import pipeline  # type: ignore
+                    # Automatically use GPU if available, otherwise CPU
+                    device = 0 if torch.cuda.is_available() else -1
+                    _pipeline = pipeline(
+                        "sentiment-analysis",
+                        model=MODEL_NAME,
+                        device=device,
+                        batch_size=32,
+                        truncation=True,
+                        max_length=512,
+                    )
+                    print(f"Model loaded on device: {'GPU' if device == 0 else 'CPU'}")
     return _pipeline
 
 
@@ -69,7 +91,17 @@ class SummarizeIn(BaseModel):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "model": MODEL_NAME}
+    # Report OpenAI configuration status without exposing secrets
+    openai_key_present = bool(os.getenv("OPENAI_API_KEY"))
+    openai_model = os.getenv("OPENAI_SUMMARY_MODEL", "gpt-4o-mini")
+    return {
+        "status": "ok",
+        "model": MODEL_NAME,
+        "openai": {
+            "configured": openai_key_present,
+            "model": openai_model,
+        },
+    }
 
 
 def _normalize_label(label: str) -> str:

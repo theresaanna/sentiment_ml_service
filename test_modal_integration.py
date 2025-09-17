@@ -4,81 +4,57 @@ Test script to verify Modal ML service integration
 """
 import os
 import sys
+import pytest
 from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
 
-# Add app directory to path
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# Ensure the project root is on the path for imports
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 
-from app.services.ml_service_client import MLServiceClient
+# Import MLServiceClient from the correct module
+from ml_service_client import MLServiceClient
 
 
 def test_modal_integration():
-    """Test the Modal ML service integration"""
-    print("Testing Modal ML Service Integration")
-    print("=" * 50)
-    
-    # Check environment variables
+    """Test the Modal ML service integration.
+    Skips if MODAL_ML_BASE_URL is not configured.
+    """
     base_url = os.getenv("MODAL_ML_BASE_URL")
     if not base_url:
-        print("❌ ERROR: MODAL_ML_BASE_URL not set in environment")
-        return False
-    
-    print(f"✅ Modal URL configured: {base_url}")
-    
-    try:
-        # Initialize the client
-        client = MLServiceClient()
-        print("✅ ML Service client initialized successfully")
-        
-        # Test single text analysis
-        print("\n📝 Testing single text analysis...")
-        test_text = "This is absolutely amazing! I love it!"
-        result = client.analyze_text(test_text)
-        
-        print(f"   Text: '{test_text}'")
-        print(f"   Sentiment: {result['predicted_sentiment']}")
-        print(f"   Confidence: {result['confidence']:.2%}")
-        print(f"   Method: {result['method']}")
-        print(f"   Models used: {', '.join(result.get('models_used', []))}")
-        
-        # Test batch analysis
-        print("\n📝 Testing batch analysis...")
-        test_texts = [
-            "This product is fantastic!",
-            "I'm not happy with the service.",
-            "It's okay, nothing special.",
-            "Absolutely terrible experience!",
-            "Best purchase I've ever made!"
-        ]
-        
-        batch_result = client.analyze_batch(test_texts)
-        
-        print(f"   Total analyzed: {batch_result['statistics']['total_analyzed']}")
-        print(f"   Method: {batch_result['method']}")
-        print("\n   Distribution:")
-        
-        stats = batch_result['statistics']
-        for sentiment, count in stats['sentiment_distribution'].items():
-            percentage = stats['sentiment_percentages'][sentiment]
-            print(f"     {sentiment.capitalize()}: {count} ({percentage:.1f}%)")
-        
-        print(f"\n   Average confidence: {stats['average_confidence']:.2%}")
-        
-        print("\n   Individual results:")
-        for i, result in enumerate(batch_result['results'], 1):
-            print(f"     {i}. '{result['text'][:50]}...' -> {result['predicted_sentiment']} ({result['confidence']:.2%})")
-        
-        print("\n✅ All tests passed! Modal integration is working correctly.")
-        return True
-        
-    except Exception as e:
-        print(f"\n❌ ERROR: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return False
+        pytest.skip("MODAL_ML_BASE_URL not set")
+
+    # Initialize the client
+    client = MLServiceClient()
+
+    # Test single text analysis
+    test_text = "This is absolutely amazing! I love it!"
+    result = client.analyze_text(test_text)
+
+    assert isinstance(result, dict)
+    assert result["predicted_sentiment"] in {"positive", "neutral", "negative"}
+    assert 0.0 <= result["confidence"] <= 1.0
+
+    # Test batch analysis
+    test_texts = [
+        "This product is fantastic!",
+        "I'm not happy with the service.",
+        "It's okay, nothing special.",
+        "Absolutely terrible experience!",
+        "Best purchase I've ever made!",
+    ]
+
+    batch_result = client.analyze_batch(test_texts)
+    assert isinstance(batch_result, dict)
+
+    stats = batch_result["statistics"]
+    assert stats["total_analyzed"] == len(test_texts)
+    dist = stats["sentiment_distribution"]
+    assert sum(dist.values()) == len(test_texts)
+    assert set(dist.keys()) == {"positive", "neutral", "negative"}
 
 
 if __name__ == "__main__":
