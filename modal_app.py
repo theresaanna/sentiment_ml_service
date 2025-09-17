@@ -1,5 +1,5 @@
 import modal
-from modal import App, Image, asgi_app, gpu
+from modal import App, Image, asgi_app, gpu, Function
 import sys
 import os
 
@@ -27,7 +27,8 @@ image = (
     .add_local_dir("tests", "/root/tests")
 )
 
-app = App("sentiment-ml-service")
+APP_NAME = "sentiment-ml-service"
+app = App(APP_NAME)
 
 # Test runner function
 @app.function(
@@ -106,13 +107,44 @@ def health_check():
         "error": error
     }
 
+def main(argv=None):
+    import argparse
+    parser = argparse.ArgumentParser(
+        description="Deploy/redeploy the existing Modal app without creating new instances."
+    )
+    parser.add_argument(
+        "command",
+        nargs="?",
+        default="deploy",
+        choices=["deploy", "redeploy", "health"],
+        help="Action to execute. 'deploy' and 'redeploy' both update the existing deployment. 'health' calls the deployed health_check.",
+    )
+    parser.add_argument(
+        "--run-tests",
+        action="store_true",
+        help="Run the deployed run_tests function after a successful deploy.",
+    )
+    args = parser.parse_args(argv)
+
+    if args.command in {"deploy", "redeploy"}:
+        print(f"Deploying '{APP_NAME}' (this updates the existing deployment)...")
+        app.deploy()
+        print("Deploy complete.")
+        if args.run_tests:
+            print("Running tests via deployed function...")
+            try:
+                tests_fn = Function.lookup(APP_NAME, "run_tests")
+                result = tests_fn.remote()
+                print(result)
+            except Exception as e:
+                print(f"Tests failed: {e}")
+                sys.exit(1)
+    elif args.command == "health":
+        print("Checking deployed health...")
+        health_fn = Function.lookup(APP_NAME, "health_check")
+        info = health_fn.remote()
+        print(info)
+
+
 if __name__ == "__main__":
-    # Optionally run tests before deploying (set RUN_REMOTE_TESTS=1 to enable)
-    with app.run():
-        if os.environ.get("RUN_REMOTE_TESTS") == "1":
-            print("Running tests...")
-            result = run_tests.remote()
-            print(result)
-    # Deploy the app
-    print("Deploying app...")
-    app.deploy()
+    main()
