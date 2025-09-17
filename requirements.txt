@@ -24,3 +24,6 @@ httpx==0.27.0
 
 # Data processing (for tests)
 pandas==2.3.2
+
+# OpenAI client
+openai>=1.0.0,<2.0.0
