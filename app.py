@@ -63,6 +63,7 @@ class BatchIn(BaseModel):
 class SummarizeIn(BaseModel):
     comments: List[Dict[str, Any]]
     sentiment: Optional[Dict[str, Any]] = None
+    video_title: Optional[str] = None  # Video title to filter out redundant words
     method: Optional[str] = "auto"  # auto | transformer | objective | openai
 
 
