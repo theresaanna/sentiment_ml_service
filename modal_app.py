@@ -2,6 +2,7 @@ import modal
 from modal import App, Image, asgi_app, gpu, Function, Secret
 import sys
 import os
+import argparse
 
 # Base image with dependencies
 image = (
@@ -111,34 +112,117 @@ def fastapi_app():
 # Health check function
 @app.function(image=image, gpu="T4")
 def health_check():
-    """Check if GPU is available and model can be loaded."""
-    import torch
+    """GPU readiness check: ensures CUDA is visible, loads model, and runs tiny inference.
+
+    Returns basic GPU info plus whether model load and inference succeeded.
+    """
+    import os
     import sys
+
+    # Ensure GPU is visible even though the base image hides CUDA by default
+    if os.environ.get("CUDA_VISIBLE_DEVICES", "") == "":
+        os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+
+    # Ensure we use the real pipeline here (not the fake one)
+    os.environ["USE_FAKE_PIPELINE"] = "0"
+
+    # Imports after setting CUDA visibility
+    import torch
+
     sys.path.insert(0, "/root")
     from service_main import get_pipeline
-    
-    # Check GPU availability
+
+    # GPU info
     gpu_available = torch.cuda.is_available()
     gpu_count = torch.cuda.device_count() if gpu_available else 0
-    
-    # Try to load the model
+    device_name = torch.cuda.get_device_name(0) if gpu_available and gpu_count > 0 else None
+
+    # Try to load the model and run a tiny inference
+    model_loaded = False
+    inference_ok = False
+    result_sample = None
+    error = None
     try:
-        pipeline = get_pipeline()
+        pipe = get_pipeline()
         model_loaded = True
-        error = None
+        # Tiny inference to validate end-to-end path
+        sample = ["ok"]
+        out = pipe(sample)
+        if isinstance(out, list) and len(out) == 1 and isinstance(out[0], dict):
+            inference_ok = True
+            # Keep only minimal info
+            result_sample = {"label": out[0].get("label"), "score": float(out[0].get("score", 0.0))}
     except Exception as e:
-        model_loaded = False
         error = str(e)
-    
+
     return {
         "gpu_available": gpu_available,
         "gpu_count": gpu_count,
+        "device_name": device_name,
         "model_loaded": model_loaded,
-        "error": error
+        "inference_ok": inference_ok,
+        "result_sample": result_sample,
+        "error": error,
     }
 
+
+# GPU-backed analysis function
+@app.function(
+    image=image,
+    gpu="T4",
+    timeout=300,
+    secrets=[Secret.from_name("openai-api-key")],
+)
+def gpu_analyze_batch(texts: list[str]):
+    """Run sentiment analysis on GPU for a list of texts.
+
+    Ensures GPU visibility even if the base image disables CUDA by default.
+    Returns a list of dicts with keys: label, score.
+    """
+    import os
+    import sys
+
+    # Ensure GPU is visible within this function even if image env hid it
+    if os.environ.get("CUDA_VISIBLE_DEVICES", "") == "":
+        os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+
+    # Avoid using fake pipeline in production GPU path unless explicitly requested
+    os.environ["USE_FAKE_PIPELINE"] = os.environ.get("USE_FAKE_PIPELINE", "0")
+
+    # Make sure our modules are importable
+    sys.path.insert(0, "/root")
+
+    from service_main import get_pipeline  # Lazy import to honor env overrides
+
+    # Normalize input
+    if isinstance(texts, str):
+        texts = [texts]
+    texts = list(texts or [])
+
+    # Load once per container; get_pipeline handles internal caching
+    pipe = get_pipeline()
+
+    # Batch processing for efficiency
+    batch_size = 32
+    raw_results = []
+    for i in range(0, len(texts), batch_size):
+        batch = texts[i:i + batch_size]
+        raw_results.extend(pipe(batch))
+
+    # Map to a simple, stable schema
+    results = []
+    for r in raw_results:
+        try:
+            label = r.get("label", "neutral")
+            score = float(r.get("score", 0.0))
+        except Exception:
+            label, score = "neutral", 0.0
+        results.append({"label": label, "score": score})
+
+    return results
+
+
 def main(argv=None):
-    import argparse
     parser = argparse.ArgumentParser(
         description="Deploy/redeploy the existing Modal app without creating new instances."
     )

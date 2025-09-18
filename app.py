@@ -69,6 +69,31 @@ def get_pipeline():
     return _pipeline
 
 
+# Remote GPU analysis integration
+MODAL_APP_NAME = os.getenv("MODAL_APP_NAME", "sentiment-ml-service")
+_GPU_FN = None
+
+
+def _should_use_remote_gpu() -> bool:
+    # Use remote GPU when not explicitly running the fake pipeline (tests/stubs)
+    return os.getenv("USE_FAKE_PIPELINE") != "1"
+
+
+def _gpu_analyze_remote(texts: List[str]) -> List[Dict[str, Any]]:
+    """Call the Modal GPU function to analyze texts.
+
+    Returns a list of {label, score}.
+    """
+    global _GPU_FN
+    if _GPU_FN is None:
+        try:
+            from modal import Function as ModalFunction  # Lazy import for local/test runs
+        except Exception as e:
+            raise RuntimeError(f"Modal client not available: {e}")
+        _GPU_FN = ModalFunction.from_name(MODAL_APP_NAME, "gpu_analyze_batch")
+    return _GPU_FN.remote(list(texts))
+
+
 app = FastAPI(title="Sentiment ML Service")
 
 
@@ -136,9 +161,13 @@ def _normalize_label(label: str) -> str:
 
 @app.post("/analyze-text")
 def analyze_text(body: TextIn):
-    # For now, we use the transformers pipeline; future: route by body.method
-    pipe = get_pipeline()
-    res = pipe([body.text])[0]
+    # Route analysis to a GPU-backed Modal function by default (except in fake/test mode)
+    if _should_use_remote_gpu():
+        res = _gpu_analyze_remote([body.text])[0]
+    else:
+        pipe = get_pipeline()
+        res = pipe([body.text])[0]
+
     label = _normalize_label(res.get("label", "neutral"))
     return {
         "success": True,
@@ -166,61 +195,61 @@ def analyze_batch(body: BatchIn):
             "overall_sentiment": "neutral"
         }
 
-    # Use the pipeline directly for all methods - simpler and more reliable
     try:
-        pipe = get_pipeline()
-        
-        # Process all texts at once if small batch, otherwise chunk it
-        texts_list = list(body.texts)  # Ensure it's a list
-        if len(texts_list) <= 32:
-            raw_results = pipe(texts_list)
+        # Normalize input
+        texts_list = list(body.texts)
+
+        # Route to GPU-backed function unless in fake/test mode
+        if _should_use_remote_gpu():
+            raw_results = _gpu_analyze_remote(texts_list)
         else:
-            # Process in batches if needed for better performance
-            batch_size = 32
-            raw_results = []
-            for i in range(0, len(texts_list), batch_size):
-                batch_texts = texts_list[i:i+batch_size]
-                batch_raw = pipe(batch_texts)
-                raw_results.extend(batch_raw)
-        
+            pipe = get_pipeline()
+            if len(texts_list) <= 32:
+                raw_results = pipe(texts_list)
+            else:
+                batch_size = 32
+                raw_results = []
+                for i in range(0, len(texts_list), batch_size):
+                    batch_texts = texts_list[i:i+batch_size]
+                    batch_raw = pipe(batch_texts)
+                    raw_results.extend(batch_raw)
+
         results = []
         counts = {"positive": 0, "neutral": 0, "negative": 0}
         confidence_sum = 0.0
-        
+
         for text, res in zip(texts_list, raw_results):
             label = _normalize_label(res.get("label", "neutral"))
             conf = float(res.get("score", 0.0))
             results.append({
-                "text": str(text)[:100],  # Ensure it's a string
-                "predicted_sentiment": label, 
+                "text": str(text)[:100],
+                "predicted_sentiment": label,
                 "confidence": conf
             })
             counts[label] += 1
             confidence_sum += conf
-        
+
         total = len(results)
         avg_confidence = confidence_sum / total if total > 0 else 0.0
-        
-        # Calculate percentages
+
         percentages = {
             "positive": (counts["positive"] / total * 100.0) if total > 0 else 0.0,
             "neutral": (counts["neutral"] / total * 100.0) if total > 0 else 0.0,
             "negative": (counts["negative"] / total * 100.0) if total > 0 else 0.0
         }
-        
-        # Determine overall sentiment
+
         if counts["positive"] >= total * 0.5:
             overall = "positive"
         elif counts["negative"] >= total * 0.4:
             overall = "negative"
         else:
             overall = "neutral"
-        
+
         return {
             "success": True,
             "results": results,
             "statistics": {
-                "total_analyzed": total, 
+                "total_analyzed": total,
                 "sentiment_distribution": counts,
                 "sentiment_percentages": percentages,
                 "average_confidence": avg_confidence
@@ -231,7 +260,6 @@ def analyze_batch(body: BatchIn):
         }
     except Exception as e:
         print(f"Error in analyze_batch: {e}")
-        # Return error response
         return {
             "success": False,
             "error": str(e),
