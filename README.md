@@ -376,7 +376,7 @@ MIT License - See LICENSE file for details
 
 For issues or questions:
 - Open an issue on GitHub
-- Contact: theresa@example.com
+- Contact: theresasumma@gmail.com
 
 ## 🔄 Updates
 
