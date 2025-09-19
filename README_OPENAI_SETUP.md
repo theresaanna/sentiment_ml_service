@@ -40,10 +40,11 @@ You should see:
 
 ### 3. Test with Your Application
 
-Start your FastAPI server:
+Start the FastAPI server locally:
 
 ```bash
-python3 app.py
+export USE_FAKE_PIPELINE=1
+uvicorn app:app --reload
 ```
 
 Then test the summarization endpoint:
@@ -54,7 +55,7 @@ curl -X POST "http://localhost:8000/summarize" \
   -d '{
     "comments": [
       {"text": "This video is amazing! Lady Gaga always delivers.", "likes": 15},
-      {"text": "I don'"'"'t agree with her feminist views but respect her artistry.", "likes": 8},
+      {"text": "I do not agree with her feminist views but respect her artistry.", "likes": 8},
       {"text": "Great interview, very insightful questions.", "likes": 12}
     ],
     "sentiment": {

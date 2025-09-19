@@ -4,12 +4,12 @@ A high-performance sentiment analysis service built with FastAPI and deployed on
 
 ## ✨ Features
 
-- **GPU-Accelerated Inference**: Utilizes NVIDIA T4 GPUs for fast model inference
-- **Auto-scaling**: Automatically scales from 1 to 10 containers based on demand
-- **Batch Processing**: Efficiently analyze multiple texts in a single request
-- **Thread-Safe**: Singleton pattern with thread locks for safe concurrent access
-- **Production-Ready**: Comprehensive test suite and automated deployment
-- **Cost-Optimized**: Uses efficient DistilBERT model with smart resource allocation
+- 3-class sentiment (positive, neutral, negative) via RoBERTa (cardiffnlp/twitter-roberta-base-sentiment-latest)
+- Remote GPU execution via Modal by default; optional lightweight local stub for tests/dev
+- Batch processing with aggregation stats and label normalization
+- Thread-safe lazy pipeline initialization
+- Optional Redis caching for summaries and fast-analysis results
+- Comprehensive tests with coverage and markers for external/integration
 
 ## 🚀 Quick Start
 
@@ -36,6 +36,17 @@ pip install -r requirements.txt
 # Run tests locally
 python -m pytest tests/ -v
 ```
+
+### Run the API locally (development)
+
+By default the service calls a remote GPU on Modal. For local development without model downloads, enable the lightweight fake pipeline and start FastAPI via Uvicorn:
+
+```bash
+export USE_FAKE_PIPELINE=1
+uvicorn app:app --reload
+```
+
+To exercise the remote GPU path from local runs, leave USE_FAKE_PIPELINE unset (or set to anything other than 1) and configure Modal as below.
 
 ### Modal Setup
 
@@ -71,7 +82,7 @@ Response:
 ```json
 {
   "status": "ok",
-  "model": "distilbert-base-uncased-finetuned-sst-2-english"
+  "model": "cardiffnlp/twitter-roberta-base-sentiment-latest"
 }
 ```
 
@@ -94,7 +105,7 @@ Response:
     "predicted_sentiment": "positive",
     "confidence": 0.9998
   },
-  "models_used": ["distilbert"]
+  "models_used": ["roberta"]
 }
 ```
 
@@ -146,6 +157,32 @@ Response:
 }
 ```
 
+## 🧪 Python Client (optional)
+
+You can call the service from Python using the provided client.
+
+Environment variables:
+- MODAL_ML_BASE_URL: Required base URL for the service (e.g., https://your-app.modal.run)
+- MODAL_ML_API_KEY: Optional API key sent as a Bearer token
+
+Example:
+
+```python path=null start=null
+from ml_service_client import MLServiceClient
+
+# Base URL can come from MODAL_ML_BASE_URL env var or be passed directly
+client = MLServiceClient(base_url="https://theresaanna--sentiment-ml-service-fastapi-app.modal.run")
+
+# Single text
+res = client.analyze_text("I absolutely love this!")
+print(res)
+
+# Batch
+texts = ["This is amazing!", "I hate this", "It's okay I guess"]
+batch = client.analyze_batch(texts)
+print(batch["statistics"], batch["results"][0])
+```
+
 ## 🧪 Testing
 
 ### Run All Tests
@@ -165,9 +202,27 @@ python -m pytest tests/test_sentiment_analysis.py -v
 python -m pytest tests/test_sentiment_analysis.py::TestPerformance -v
 ```
 
-### Test Coverage
+### Test markers and external dependencies
+- Markers:
+  - integration: tests that hit external services or require secrets
+  - external: tests that call external APIs (e.g., Modal, OpenAI)
+- To skip them (recommended for local dev):
 ```bash
-python -m pytest tests/ --cov=app --cov-report=html
+pytest -m "not integration and not external" -vv
+```
+- OpenAI summarizer tests automatically skip if OPENAI_API_KEY is not set.
+- Neutral detection tests skip unless a local service is reachable at LOCAL_API_URL (default http://localhost:8000).
+- To test RoBERTa directly, set RUN_ROBERTA_TESTS=1 (may download a model). To use deployed GPU health check instead, set MODAL_GPU_TEST=1.
+
+### Test Coverage
+- Quick view (skips external/integration):
+```bash
+pytest -m "not integration and not external" --cov=. --cov-branch --cov-report=term-missing:skip-covered
+```
+- HTML report:
+```bash
+pytest -m "not integration and not external" --cov=. --cov-branch --cov-report=html
+open htmlcov/index.html
 ```
 
 ## 🚢 Deployment
@@ -207,14 +262,19 @@ modal app stop sentiment-ml-service
 
 ### Environment Variables
 
-| Variable | Description | Default |
-|----------|-------------|---------||
-| `MODEL_NAME` | Hugging Face model ID | `distilbert-base-uncased-finetuned-sst-2-english` |
-| `CUDA_VISIBLE_DEVICES` | GPU device selection | `0` |
-| `OMP_NUM_THREADS` | OpenMP thread limit | `1` |
-| `MKL_NUM_THREADS` | MKL thread limit | `1` |
-| `OPENBLAS_NUM_THREADS` | OpenBLAS thread limit | `1` |
-| `TOKENIZERS_PARALLELISM` | Tokenizer parallelism | `false` |
+- MODEL_NAME: Hugging Face model ID (default: cardiffnlp/twitter-roberta-base-sentiment-latest)
+- USE_FAKE_PIPELINE: Set to 1 to use a lightweight local stub (avoids model download and remote calls) for dev/tests
+- MODAL_APP_NAME: Modal app name for remote GPU functions (default: sentiment-ml-service)
+- OPENAI_API_KEY: Required for the /summarize endpoint (OpenAI-powered CommentSummarizer)
+- OPENAI_SUMMARY_MODEL: OpenAI model for summaries (default: gpt-4o-mini)
+- OPENAI_TIMEOUT_SECONDS: HTTP timeout for OpenAI requests (default: 30)
+- REDIS_URL: Optional Redis URL (enables caching if reachable)
+- REDIS_CACHE_TTL_HOURS: Default cache TTL in hours (default: 24)
+- REDIS_ANALYSIS_TTL_HOURS: Analysis-specific TTL in hours (default: 6)
+- MODAL_ML_BASE_URL: Base URL for the optional Python client (ml_service_client)
+- MODAL_ML_API_KEY: API key for the optional Python client
+- OMP_NUM_THREADS, MKL_NUM_THREADS, OPENBLAS_NUM_THREADS: Thread caps (default: 1)
+- TOKENIZERS_PARALLELISM: Set to "false" to avoid tokenizer parallel warnings
 
 ### Modal Configuration
 
@@ -244,14 +304,28 @@ modal app stop sentiment-ml-service
 ### Project Structure
 ```
 sentiment_ml_service/
-├── app.py                 # FastAPI application
-├── modal_app.py          # Modal deployment configuration
-├── deploy.py             # Automated deployment script
-├── requirements.txt      # Python dependencies
+├── app.py                     # FastAPI application (routes, remote GPU integration, summarize)
+├── modal_app.py               # Modal deployment configuration
+├── deploy.py                  # Automated deployment script
+├── cache.py                   # Optional Redis cache service
+├── ml_service_client.py       # Simple HTTP client for the service
+├── app_modules/
+│   ├── __init__.py
+│   └── science/
+│       └── comment_summarizer.py   # OpenAI-powered summarizer
 ├── tests/
-│   ├── test_app.py      # Basic tests
-│   └── test_sentiment_analysis.py  # Comprehensive tests
-└── README.md            # This file
+│   ├── test_app.py
+│   ├── test_sentiment_analysis.py
+│   ├── test_app_additional.py
+│   ├── test_cache_unit.py
+│   ├── test_comment_summarizer_unit.py
+│   └── test_deploy_unit.py
+├── test_neutral_detection.py      # Optional local/Modal validation (skipped by default)
+├── test_openai_summarizer.py      # OpenAI summarizer tests (skips if no API key)
+├── test_modal_integration.py      # Modal integration test
+├── requirements.txt
+├── README.md
+└── README_OPENAI_SETUP.md
 ```
 
 ### Adding New Features
@@ -306,6 +380,7 @@ For issues or questions:
 
 ## 🔄 Updates
 
-- **v1.0.0** (2024-01): Initial release with GPU support
-- **v1.1.0** (2024-01): Added batch processing and auto-scaling
+- **v1.3.0** (2025-09): Documentation refreshed (RoBERTa default, local dev via USE_FAKE_PIPELINE, expanded tests and coverage guidance), added Python client docs
 - **v1.2.0** (2024-01): Performance optimizations and comprehensive testing
+- **v1.1.0** (2024-01): Added batch processing and auto-scaling
+- **v1.0.0** (2024-01): Initial release with GPU support
