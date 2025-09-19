@@ -4,11 +4,15 @@ Test script to verify that the RoBERTa model correctly detects neutral sentiment
 This will help diagnose why neutral comments aren't showing up in the UI.
 """
 
-import requests
+import pytest
+# Ensure optional dependency is handled gracefully
+try:
+    import requests  # type: ignore
+except Exception:
+    pytest.skip("requests not installed; skipping neutral detection tests", allow_module_level=True)
 import json
 from typing import List, Dict
 import os
-import pytest
 
 # Test comments with expected sentiments
 TEST_COMMENTS = [
@@ -90,54 +94,44 @@ def test_local_api():
     assert set(result["statistics"]["sentiment_distribution"].keys()) == {"positive", "neutral", "negative"}
 
 
-@pytest.mark.skipif(os.getenv("RUN_ROBERTA_TESTS") != "1", reason="Set RUN_ROBERTA_TESTS=1 to run RoBERTa download test")
+@pytest.mark.skipif(
+    os.getenv("RUN_ROBERTA_TESTS") != "1" and os.getenv("MODAL_GPU_TEST") != "1",
+    reason="Set RUN_ROBERTA_TESTS=1 for local model test or MODAL_GPU_TEST=1 to use deployed GPU health check",
+)
 def test_direct_roberta():
-    """Optionally test RoBERTa model directly without the API."""
-    from transformers import pipeline
+    """Optionally test RoBERTa model directly, or via deployed GPU health check on Modal.
 
-    classifier = pipeline(
-        "sentiment-analysis",
-        model="cardiffnlp/twitter-roberta-base-sentiment-latest",
-    )
+    - If RUN_ROBERTA_TESTS=1, load the HF pipeline locally (may download model).
+    - Else if MODAL_GPU_TEST=1, call the deployed Modal health_check function.
+    """
+    if os.getenv("RUN_ROBERTA_TESTS") == "1":
+        from transformers import pipeline
+        classifier = pipeline(
+            "sentiment-analysis",
+            model="cardiffnlp/twitter-roberta-base-sentiment-latest",
+        )
+        test_texts = [
+            "This is amazing!",
+            "This is terrible!",
+            "This is a factual statement.",
+        ]
+        results = classifier(test_texts)
+        assert isinstance(results, list) and len(results) == 3
+        for res in results:
+            assert "label" in res and "score" in res
+        return
 
-    test_texts = [
-        "This is amazing!",
-        "This is terrible!",
-        "This is a factual statement.",
-    ]
+    # Fallback: run via deployed GPU function using Modal client
+    try:
+        from modal import Function as ModalFunction
+    except Exception:
+        pytest.skip("Modal client not available for GPU health check")
 
-    results = classifier(test_texts)
-    assert isinstance(results, list) and len(results) == 3
-    for res in results:
-        assert "label" in res and "score" in res
-    """Run all tests."""
-    print("ROBERTA NEUTRAL SENTIMENT DETECTION TEST")
-    print("=" * 60)
-    
-    # Test direct model first
-    direct_success = test_direct_roberta()
-    
-    # Test API
-    api_success = test_local_api()
-    
-    # Summary
-    print("\n" + "=" * 60)
-    print("TEST SUMMARY")
-    print("=" * 60)
-    print(f"Direct RoBERTa test: {'✅ PASSED' if direct_success else '❌ FAILED'}")
-    print(f"API test: {'✅ PASSED' if api_success else '❌ FAILED'}")
-    
-    if not api_success and direct_success:
-        print("\n⚠️  The model works directly but not through the API.")
-        print("   Check the API's label normalization logic.")
-    elif not direct_success:
-        print("\n❌ The model itself is not working correctly.")
-        print("   Check that the model is properly downloaded.")
-    elif api_success and direct_success:
-        print("\n✅ Everything is working! Neutral detection is functional.")
-        print("   If you're still not seeing neutral in the UI, check:")
-        print("   1. The Flask app's connection to this API")
-        print("   2. The JavaScript display logic in the frontend")
+    app_name = os.getenv("MODAL_APP_NAME", "sentiment-ml-service")
+    health_fn = ModalFunction.from_name(app_name, "health_check")
+    info = health_fn.remote()
+    assert info.get("gpu_available") is True, info
+    assert info.get("inference_ok") is True, info
 
 if __name__ == "__main__":
     main()

@@ -5,10 +5,12 @@ Test script to verify Modal ML service integration
 import os
 import sys
 import pytest
-from dotenv import load_dotenv
-
-# Load environment variables
-load_dotenv()
+# Load environment variables if python-dotenv is available
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except Exception:
+    pass
 
 # Ensure the project root is on the path for imports
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))

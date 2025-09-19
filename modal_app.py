@@ -8,7 +8,7 @@ import argparse
 image = (
     Image.debian_slim(python_version="3.11")
     .pip_install_from_requirements("requirements.txt")
-    .pip_install("pytest", "httpx")  # Add test dependencies
+    .pip_install("pytest", "httpx", "requests", "python-dotenv")  # Add test deps incl. HTTP clients
     .env({
         "OMP_NUM_THREADS": "1",
         "MKL_NUM_THREADS": "1",
@@ -25,6 +25,11 @@ image = (
     .add_local_file("app.py", "/root/service_main.py")
     .add_local_file("app.py", "/root/app.py")
     .add_local_file("cache.py", "/root/cache.py")
+    # Include client and root-level tests for integration coverage
+    .add_local_file("ml_service_client.py", "/root/ml_service_client.py")
+    .add_local_file("test_modal_integration.py", "/root/test_modal_integration.py")
+    .add_local_file("test_openai_summarizer.py", "/root/test_openai_summarizer.py")
+    .add_local_file("test_neutral_detection.py", "/root/test_neutral_detection.py")
     # Add tests directory for CI and remote testing
     .add_local_dir("tests", "/root/tests")
 )
@@ -42,6 +47,10 @@ def run_tests(pipeline_mode: str = "auto"):
     """Run tests in Modal environment (CPU-only for stability).
 
     pipeline_mode: one of {"auto", "fake", "real"}
+    Also enables optional integration tests when possible by setting:
+    - MODAL_ML_BASE_URL: points to deployed FastAPI app
+    - LOCAL_API_URL: same as above to exercise API path
+    - RUN_ROBERTA_TESTS=1: opt-in to direct model test
     """
     import subprocess
     import sys
@@ -66,8 +75,17 @@ def run_tests(pipeline_mode: str = "auto"):
     else:  # auto
         env["USE_FAKE_PIPELINE"] = env.get("USE_FAKE_PIPELINE", "1")
 
+    # Enable optional integration tests if not already configured
+    default_base = f"https://theresaanna--{APP_NAME}-fastapi-app.modal.run"
+    env.setdefault("MODAL_ML_BASE_URL", default_base)
+    env.setdefault("LOCAL_API_URL", env["MODAL_ML_BASE_URL"])
+    # Avoid heavy local model download; use GPU path instead
+    env["RUN_ROBERTA_TESTS"] = env.get("RUN_ROBERTA_TESTS", "0")
+    env["MODAL_GPU_TEST"] = "1"
+    env.setdefault("MODAL_APP_NAME", APP_NAME)
+
     result = subprocess.run(
-        ["python", "-m", "pytest", "/root/tests/", "-v", "--tb=short"],
+        ["python", "-m", "pytest", "-v", "--tb=short"],
         capture_output=True,
         text=True,
         cwd="/root",
